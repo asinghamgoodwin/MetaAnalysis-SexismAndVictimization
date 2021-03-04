@@ -1,6 +1,6 @@
 ---
 title: "PRISMA article inclusion diagram"
-output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
@@ -10,19 +10,24 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r packages}
 #install.packages("PRISMAstatement")
 library(PRISMAstatement)
+library(DiagrammeRsvg)
+library(rsvg)
 ```
 
 Here is an example from https://cran.r-project.org/web/packages/PRISMAstatement/vignettes/PRISMA.html :
 ```{r example}
-prisma(found = 750,
-       found_other = 123,
-       no_dupes = 776, 
-       screened = 776, 
-       screen_exclusions = 13, 
-       full_text = 763,
-       full_text_exclusions = 17, 
-       qualitative = 746, 
-       quantitative = 319,
-       width = 800, height = 800)
+prsm <- prisma(found = 750,
+               found_other = 123,
+               no_dupes = 776,
+               screened = 776,
+               screen_exclusions = 13,
+               full_text = 763,
+               full_text_exclusions = 17,
+               qualitative = 746,
+               quantitative = 319,
+               width = 200, height = 200,
+               dpi = 36)
+PRISMAstatement:::prisma_pdf(prsm, "test.pdf")
+knitr::include_graphics("test.pdf")
 ```
 
