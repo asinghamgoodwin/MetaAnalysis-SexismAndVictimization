@@ -76,6 +76,7 @@ knitr::kable(fake_data)
 ## Using `metafor` and `clubsandwich`
 
 References:
+
 1. This working paper provides a very useful explanation and guide: https://www.jepusto.com/#working-papers 
 2. Here's the clubSandwich documentation: https://cran.r-project.org/web/packages/clubSandwich/clubSandwich.pdf
 3. And the metafor website: https://wviechtb.github.io/metafor/reference/rma.mv.html
@@ -84,8 +85,9 @@ References:
 
 * What type of model?
   * Multivariate, becasuse some studies contributed multiple effect sizes (hence, `rma.mv`)
+  * Random effects, because our studies represent a distribution of different true effects
 * What is the correlation structure between estimates from the same study?
-  * We don't know! (not enough info provided per study) --> so we estimate it as constant, rho = ?? (0.6/0.8)
+  * We don't know! (not enough info provided per study) --> so we estimate the fixed effects component as constant, rho = ?? (0.6/0.8)
   * Since we might be wrong with the assumption above, we use Robust Variance Estimation (RVE) when conducting our statistical tests
 * What is the nested structure of our data?
   * One option would be "research group" --> studies --> effect sizes
