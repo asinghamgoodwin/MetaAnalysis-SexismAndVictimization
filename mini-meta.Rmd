@@ -1,6 +1,7 @@
 ---
 title: "Mini-meta"
 output: github_document
+always_allow_html: true
 ---
 
 ```{r setup, include=FALSE}
@@ -17,54 +18,27 @@ library(tidyverse)
 library(metafor)
 library(clubSandwich)
 library(robumeta)
-#library(kableExtra) #--> might be helpful later for making nice tables
+library(kableExtra)
 ```
 
 ```{r}
-study_data = read.csv("mini-meta-practice-data.csv") %>% 
+study_data = read.csv("mini-meta-practice-data2.csv") %>% 
   janitor::clean_names(.) %>% 
   rowid_to_column(., "effect_size_id") %>% 
   mutate_at(., vars(all_of(c("decade_of_majority_of_data"))), factor) %>% 
   mutate_at(., vars(all_of(c("exposure_operationalization",
                              "outcome_operationalization",
                              "source_population",
-                             "which_model_is_this_from_in_their_analysis_table",
-                             "confounders",
-                             "notes_about_measure_of_association_type"))), list(as.character)) %>% 
-  rename(.,
-         sample_size = sample_size_observations,
-         SE = standard_deviation_error,
-         MA_type = measure_of_association_type,
-         MA_number = measure_of_association_number)
+                             "table_and_model",
+                             "authors",
+                             "publication_date",
+                             "title",
+                             "label",
+                             "confounders"))), list(as.character)) %>% 
+  rename(., `exposure scale: higher means more sexism` = exposure_scale_higher_means_more_sexism)
 
-knitr::kable(study_data)
-```
-</details>
-
-<details>
-<summary> DELETE THIS ONCE I'VE REPLACED THE FAKE DATA WITH REAL DATA </summary>
-
-## Made-up dataset, for easier practicing
-```{r}
-set.seed(123)
-replication_counts = c(3, 2, 1, 1, 1)
-
-fake_data = tibble(
-  es_id = 1001:1008,
-  study_id = rep(1:5, replication_counts),
-  authors = rep(c("Author1", "Author2", "Author3", "Author4", "Author1"), replication_counts),
-  pub_date = as.character(rep(2001:2005, replication_counts)),
-  unit_of_analysis = rep(c("City/MSA", "County", "Neighborhood", "County", "State"), replication_counts),
-  setting = rep(c("Urban", "Rural", "Urban", "Rural", "USA"), replication_counts),
-  outcome_data_source = rep(c("FBI", "Survey", "Survey", "Local PD", "FBI"), replication_counts),
-  sample_size = rep(c(75, 100, 30, 150, 50), replication_counts),
-  #num_predictors = c(??????), #number of predictors in the regression model
-  result = rnorm(8, mean = 1.03, sd = 0.3),
-  error = abs(rnorm(8, mean = 0.04, sd = 0.03)),
-  label = c(": Edu", ": Employment", ": Gov't rep", ": IPV", ": Homicide", "", "", "")
-)
-
-knitr::kable(fake_data)
+kable_paper(kable(study_data),
+            bootstrap_options = c("condensed", "striped"))
 ```
 </details>
 
@@ -74,6 +48,39 @@ knitr::kable(fake_data)
 # condense to one line per study
 # note the number of effects that that study contributed
 # order alphabetically
+
+for_summary = study_data %>%
+  group_by(study_id) %>%
+  mutate(`Number of effects contributed` = n()) %>%
+  ungroup() %>%
+  mutate(.,
+         Study = paste0(authors, " (", publication_date, ")"), ) %>%
+  rename(
+    .,
+    `Sample size` = sample_size,
+    `Unit of analysis` = unit_of_analysis,
+    `Decade of majority of data` = decade_of_majority_of_data,
+    `Outcome data source` = outcome_data_source,
+    `Survey or surveillance?` = survey_or_surveillance
+  ) %>%
+  select(
+    .,
+    Study,
+    `Unit of analysis`,
+    `Survey or surveillance?`,
+    `Outcome data source`,
+    `Decade of majority of data`,
+    `Number of effects contributed`,
+    `Sample size`
+  ) %>%
+  arrange(Study)
+
+
+kable_paper(
+  kable(distinct(for_summary, Study, .keep_all = TRUE),
+        caption = "Descriptive Information of Included Studies"),
+  bootstrap_options = "condensed"
+  )
 ```
 
 
@@ -81,12 +88,20 @@ knitr::kable(fake_data)
 
 First, look at the information we have on these effect sizes:
 ```{r}
-knitr::kable(select(study_data,
-                    study_id,
-                    sample_size,
-                    MA_type,
-                    MA_number,
-                    SE))
+kable_paper(kable(
+  select(
+    study_data,
+    study_id,
+    sample_size,
+    `exposure scale: higher means more sexism`,
+    num_predictors,
+    beta,
+    standard_error
+  )
+),
+full_width = FALSE,
+bootstrap_options = "condensed"
+)
 ```
 
 **We are going to convert all effect sizes into partial corerlation coefficients.**
@@ -116,17 +131,33 @@ This means we'll need to convert effect sizes in two steps: (1) get the t-test s
 *Note: for a handful of studies, they already provide partial correlation coefficients. For others, they provide 2x2 tables or risk differences. In these cases, we can use other `escalc` options to convert between d-family and r-family effects (not shown here yet).*
 ```{r}
 # Step 1: get the t-test statistic
-# Step 2: use `escalc` to compute partial correlation coefficients. add on to data table.
+with_t_stats = study_data %>% 
+  mutate(t_test = beta / standard_error) %>% 
+  # flip the sign if they measured the exposure in the opposite direction
+  mutate(t_test = ifelse(`exposure scale: higher means more sexism`, t_test, t_test*-1))
+
+# Step 2: use `escalc` to compute partial correlation coefficients
+for_analysis = escalc(
+  measure = "PCOR",
+  data = with_t_stats,
+  ti = t_test,
+  ni = sample_size,
+  mi = num_predictors
+)
 ```
 </details>
 
 <br>
 Here is our standardized data, ready for analysis:
 ```{r}
-#knitr::kable(??)
+knitr::kable(
+  select(for_analysis, effect_size_id, study_id, t_test, yi, vi),
+  digits = 3,
+  caption = "yi and vi are the calculated partial correlation effect size and sampling variance"
+)
 ```
 
-*Note: We can see here that some effects are positive [supporting the amelioration hypothesis] and others are negative [supporting the backlash hypothesis]. Effects from study ?? have higher variance than the rest, so later on in the forest plot we should expect to see them have wider confidence intervals.*
+*Note: We can see here that some effects are positive [supporting the backlash hypothesis] and others are negative [supporting the amelioration hypothesis]. Effects from study #19 (Kawachi et al.) have higher variance than the rest, so later on in the forest plot we should expect to see them have wider confidence intervals.*
 
 ## Build our regression model, conduct statistical tests, create plots
 
@@ -157,22 +188,22 @@ rho <- 0.6 #is this a good assumption for us? In other places it's 0.8....
 
 # create a covariance matrix assuming constant sampling correlation (working model)
 cov_matrix <- impute_covariance_matrix(
-  vi = fake_data$error, #vector of variances
-  cluster = fake_data$study_id,
+  vi = for_analysis$vi, #vector of variances
+  cluster = for_analysis$study_id,
   r = rho, #assuming constant. make sure we pick the right value.
   smooth_vi = FALSE #this is the default. how would we know if we want to smooth?
-  #subgroup = fake_data$authors, #i *think* this is where we'd do heirarchical clustering. but not sure, so leaving it out for now
+  #subgroup = for_analysis$authors, #i *think* this is where we'd do heirarchical clustering. but not sure, so leaving it out for now
 )
 
 # fit random effects working model in metafor
 multilevel_model <- rma.mv(
   # here I'm specificying a formula, rather than an argument for the Y, and for the moderators
-  result ~ 0 + outcome_data_source + setting, #"use a no-intercept specificaiton so that coefficients represent avg effect sizes for the corresponding category" (pre-print p.23)
+  yi ~ 0 + decade_of_majority_of_data + unit_of_analysis, #"use a no-intercept specificaiton so that coefficients represent avg effect sizes for the corresponding category" (pre-print p.23)
   V = cov_matrix,
-  random = ~ 1 | study_id / es_id, #this designates the nested structure of the random effects. QUESTION: if we do heirarchical + clustered, how do we designate that?
+  random = ~ 1 | study_id / effect_size_id, #this designates the nested structure of the random effects. QUESTION: if we do heirarchical + clustered, how do we designate that?
   #sparse = TRUE, #this is about speeding up the process, so not sure if it's necessary. I left it out.
   #test= "t", #use t-tests instead of the default z. why would we want this? (I left it out.)
-  data = fake_data
+  data = for_analysis
 )
 ```
 
@@ -186,7 +217,7 @@ multilevel_model # Note that this reports model-based (not robust) standard erro
 #these tests are RVE based and are robust to mispecification of the variances and covariances
 coef_test(
   obj = multilevel_model, #estimation model above
-  #cluster = fake_data$study_id, #define cluster IDs (not needed, already specified in model)
+  #cluster = for_analysis$study_id, #define cluster IDs (not needed, already specified in model)
   vcov = "CR2" #estimation method (CR2 is best)
 )
 ```
@@ -213,10 +244,10 @@ conf_int(
 ```{r funnel_plot}
 # For the funnel and forest plots, it makes more sense (to me) to plot from a regression model that doesn't include moderators.
 no_moderators <- rma.mv(
-  result ~ 1,
+  yi ~ 1,
   V = cov_matrix,
-  random = ~ 1 | study_id / es_id, #this designates the nested structure of the random effects. QUESTION: if we do heirarchical + clustered, how do we designate that?
-  data = fake_data
+  random = ~ 1 | study_id / effect_size_id, #this designates the nested structure of the random effects. QUESTION: if we do heirarchical + clustered, how do we designate that?
+  data = for_analysis
 )
 
 funnel(no_moderators)
@@ -231,20 +262,20 @@ ranktest(no_moderators)
 
 ```{r forest_plot}
 forest(
-  x = rma.mv(result ~ 1, V = cov_matrix, random = ~ 1 | study_id / es_id, data = fake_data,
-             slab=paste0(authors, " (", pub_date, ")", label)),
+  x = rma.mv(yi ~ 1, V = cov_matrix, random = ~ 1 | study_id / effect_size_id, data = for_analysis,
+             slab=paste0(word(authors, 1, sep = " |,"), " (", publication_date, "): ", label)),
   annotate = TRUE, #does this add numbers on to the plot?
   addfit = FALSE, #TRUE would add in one summary measure for the whole thing
   #addpred = FALSE, #the bounds of the prediction interval (might not be meaningful)
   showweights = FALSE, #TRUE would be interesting to see, but the documentation warns the weights shown don't reflect the complexity from the model with rma.mv
   #level=x$level, #this is about the CI level, which I don't think is included anywhere in our model? even though that's where the default is taken from
-  refline = 1, #I put this at 1 to show the relation to the null. change if not using ORs
+  refline = 0, #I put this at 1 to show the relation to the null. change if not using ORs
   #digits=2L, #rounding for annotations
   #xlab, #label for the x-axis
-  #slab = fake_data$study_id, #study labels. supress with NA, or add column
+  #slab = for_analysis$study_id, #study labels. supress with NA, or add column
   #ilab, #optional extra label for studies
   #ilab.xpos, ilab.pos,
-  order = c(1:3, 8, 4:7), #specify how the studies should be ordered, including obs (effect sizes), prec (variances), or a vector with the order
-  header = c("Study (& specific effect)", "Estimate [95% CI]") #can pass in a character vector for left & right headings, or TRUE
+  #order = c(1:3, 8, 4:7), #specify how the studies should be ordered, including obs (effect sizes), prec (variances), or a vector with the order
+  header = TRUE #c("Study (& specific effect)", "Estimate [95% CI]") #can pass in a character vector for left & right headings, or TRUE
 )
 ```
