@@ -1,0 +1,816 @@
+---
+title: "First Analysis 4-30"
+author: "Alicia"
+date: "4/30/2021"
+output:
+  pdf_document: default
+  html_document: default
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Step 1: Import & clean data
+
+<details>
+<summary> Click to expand and see the initial data import and cleaning steps & full table from the data extraction form. </summary>
+
+```{r libraries, echo=TRUE, output='hide', warning=FALSE, message=FALSE}
+library(tidyverse)
+library(metafor)
+library(clubSandwich)
+library(robumeta)
+library(kableExtra)
+library(table1)
+```
+
+**Import data, making sure everything is the correct data type.**
+
+```{r}
+all_data = read_csv("Data/FirstPassData4-30.csv",
+                      # up to outcome + up to exposure_reliability + 
+                      col_types = paste0("nnccccfffccffcfffcncccc", "ffffffffffffffllcllllclfc", "fccccfnnnnllnnncnnnlflcc"))
+```
+
+**Fill in information in columns that are aggregates of others.**
+
+```{r}
+domestic_perpetrator_strings = c("husband",
+                                 "Family violence",
+                                 "family",
+                                 "Intimate partner",
+                                 "IPV")
+
+non_domestic_known_perpetrator_strings = c("known nonintimate",
+                                           "acquaintance",
+                                           "friend")
+
+
+all_data = all_data %>% 
+  group_by(Study_ID) %>% 
+  mutate(Combined_survey_surveillance = paste0(unique(Survey_surveillance), collapse = " & "),
+         Combined_outcome_data_source = paste0(unique(Outcome_data_source), collapse = " & "),
+         Combined_exposure_level = paste0(unique(Exposure_level), collapse = " & "),
+         Combined_outcome_type_factor = paste0(unique(Outcome_type_factor), collapse = " & "),
+         Num_EMs_from_this_study = length(unique(Effect_ID))
+  ) %>% 
+  ungroup() %>% 
+  mutate(Exposure_category_economic = Exposure_category_employment | Exposure_category_financial,
+         Exposure_combo = (as.integer(!is.na(Exposure_labor_force_participation)) +
+                             as.integer(!is.na(Exposure_employment_unemployment)) +
+                             as.integer(!is.na(Exposure_income)) +
+                             as.integer(!is.na(Exposure_management_professional_roles))+
+                             as.integer(!is.na(Exposure_women_owned_businesses)) +
+                             as.integer(!is.na(Exposure_education)) +
+                             as.integer(!is.na(Exposure_poverty)) +
+                             as.integer(!is.na(Exposure_representation_in_government)) +
+                             as.integer(!is.na(Exposure_voter_registration_civic_participation)) +
+                             as.integer(!is.na(Exposure_maternal_mortality)) +
+                             as.integer(!is.na(Exposure_teen_pregnancy)) +
+                             as.integer(!is.na(Exposure_other_health_outcomes)) +
+                             as.integer(!is.na(Exposure_women_legal_rights))) > 1,
+         Unadjusted = Confounders == "NONE (UNADJUSTED)",
+         Victimization_type = as.factor(
+           case_when(Outcome_type_factor %in% c("Intimate partner homicide",
+                                                "Female homicide") ~ "Homicide",
+                     Outcome_type_factor %in% c("Rape",
+                                                "Sexual assault") ~ "Rape & sexual assault",
+                     Outcome_type_factor %in% c("Assault",
+                                                "IPV",
+                                                "Family violence",
+                                                "Harassment") ~ "IPV, harassment, & assault",
+                     TRUE ~ "999")),
+         Perpetrator_relationship = as.factor(
+           case_when(str_detect(Outcome, paste0(domestic_perpetrator_strings, collapse = "|")) ~ "Domestic/intimate partner",
+                     str_detect(Outcome, paste0(non_domestic_known_perpetrator_strings, collapse = "|")) ~ "Non-domestic known perpetrator",
+                     TRUE ~ "Unknown or not specified")),
+         Exposure_level_condensed = as.factor(
+           case_when(Exposure_level %in% c("City", "MSA") ~ "City/MSA",
+                     Exposure_level %in% c("County") ~ "County",
+                     Exposure_level %in% c("State") ~ "State",
+                     TRUE ~ "999")),
+         Race = as.factor(
+           case_when(str_detect(Outcome, "White") ~ "White",
+                     str_detect(Outcome, "Black") ~ "Black",
+                     TRUE ~ "999"))
+  ) %>% 
+  group_by(Study_ID) %>% 
+  mutate(Combined_exposure_types = paste0(c(rep("Economic", min(sum(Exposure_category_economic, na.rm = TRUE), 1)),
+                                            rep("Education", min(sum(Exposure_category_education, na.rm = TRUE), 1)),
+                                            rep("Political representation", min(sum(Exposure_category_political, na.rm = TRUE), 1)), 
+                                            rep("Legal rights", min(sum(Exposure_category_legal_rights, na.rm = TRUE), 1)),
+                                            rep("Health indicators", min(sum(Exposure_category_womens_health, na.rm = TRUE), 1))
+                                            ), collapse = " & ")
+  ) %>% 
+  ungroup() %>% 
+  mutate_if(is.logical, ~replace(., is.na(.), FALSE)) %>% 
+  mutate(Decade = fct_relevel(Decade, c("1970s", "1980s", "1990s", "2000s", "2010s")),
+         Survey_surveillance = fct_relevel(Survey_surveillance, c("Survey", "Surveillance")),
+         Study_design = fct_relevel(Study_design, c("Cross-sectional", "Serial cross-sectional", "Longitudinal", "Difference over time in exposure vs. outcome")),
+         Outcome_data_source_condensed = fct_relevel(Outcome_data_source_condensed, c("Survey", "Hospital records", "FBI", "Local law enforcement", "CDC", "Other (DOE)")),
+         Exposure_level = fct_relevel(Exposure_level, c("State", "City", "MSA", "Neighborhood", "County", "Occupation & Industry")),
+         Ecological_cross_level = ifelse(Study_ID == 17, "Unable to determine", Ecological_cross_level),
+         Ecological_cross_level = fct_recode(Ecological_cross_level, "Ecological" = "1", "Cross-level" = "3", "Unable to determine" = "2", "Unable to determine" = "Unable to determine"),
+         Ecological_cross_level = fct_relevel(Ecological_cross_level, c("Ecological", "Cross-level", "Unable to determine"))
+
+  )
+```
+
+```{r}
+summary(filter(all_data, Ecological_cross_level == "Ecological")$Sample_size)
+summary(filter(all_data, Ecological_cross_level == "Cross-level")$Sample_size)
+summary(filter(all_data, Ecological_cross_level == "Unable to determine")$Sample_size)
+
+```
+
+</details>
+
+<br>
+*TODOs & options moving forward:*
+
+* Double-check the accuracy of the `Outcome` & `Outcome_type_factor` columns (esp. info about victim sex, if we want to use that)
+* Are the `Outcome` categories what make the most sense for analysis?
+* Are the `Exposure` categories what make the most senese for analysis?
+* Do we want to do anything quantitative with `Confounders`?
+* Anything else that would make sense as a predictor that we haven't captured?
+  * Maybe: location (South / not South? Within 1 state vs. aross many?)
+  * Maybe: exposure type
+
+## Step 2: Describe the data
+
+<details>
+<summary> Click to setup code. </summary>
+```{r}
+# **Summary stats, study-level:**
+
+study_level = all_data %>% 
+  distinct(Study_ID, .keep_all = TRUE)
+
+# table1(~ as.numeric(PubYear) + 
+#        Combined_outcome_data_source + Combined_outcome_type_factor +
+#        Combined_exposure_level + Combined_exposure_types + Exposure_combo +
+#        Unadjusted + Model_type + Num_EMs_from_this_study, data = study_level)
+```
+
+
+**Summary stats, EM-level:**
+```{r}
+em_level = all_data %>% 
+  mutate(Included_in_meta_regression = ifelse(Include_in_regression %in% c("Yes", "Maybe - can we treat SUR like normal?", "Maybe - no variance with partial correlation") & Study_ID != 30, 1, 0),
+         Included_in_meta_regression = factor(Included_in_meta_regression, levels=c(1, 0), labels=c("Included in regression", "Excluded")))
+
+label(em_level$Decade) <- "Decade of majority of datapoints"
+label(em_level$Exposure_level) <- "Exposure: level of analysis"
+label(em_level$Survey_surveillance) <- "Outcome: survey or surveillance?"
+label(em_level$Outcome_data_source_condensed) <- "Outcome: data source"
+label(em_level$Victimization_type) <- "Outcome: victimization type"
+label(em_level$Perpetrator_relationship) <- "Outcome: victim/offender relationship"
+
+# Table with more variables, that didn't make t into the thesis table 1
+table1(~ Study_design + Ecological_cross_level + Exposure_level + Exposure_combo + Exposure_category_employment + Exposure_category_education + 
+         Exposure_category_political + Exposure_category_legal_rights + Exposure_category_womens_health +
+         Exposure_absolute_or_relative + Outcome_type_factor +
+       Sample_size + Unadjusted | Included_in_meta_regression, data = em_level)
+```
+</details>
+
+```{r}
+#Table 1, for thesis
+table1(~ Decade + Exposure_level + Survey_surveillance + Outcome_data_source_condensed + 
+         Victimization_type + Perpetrator_relationship | Included_in_meta_regression, 
+       data = em_level,
+       overall = FALSE
+)
+```
+
+<br>
+ 
+<br>
+<details> <summary> Click to see Table listing all studies </summary>
+
+```{r}
+for_summary = study_level %>% 
+  mutate(Included_in_meta_regression = ifelse(Include_in_regression %in% c("Yes", "Maybe - can we treat SUR like normal?", "Maybe - no variance with partial correlation") & Study_ID != 30, "Yes", "No")) %>% 
+  select(Authors_abbr,
+         PubYear,
+         #Title,
+         #Hypothesis,
+         Source_population,
+         Combined_survey_surveillance,
+         Combined_outcome_data_source,
+         Combined_outcome_type_factor,
+         Combined_exposure_level,
+         Combined_exposure_types,
+         # NOTE: this isn't necessarily consistent per study
+         Sample_size,
+         Num_EMs_from_this_study,
+         Included_in_meta_regression) 
+  
+#kable_paper(
+  kable(for_summary,
+        col.names = c("Authors", "Publication Year", "Source population",
+                      "Outcome: survey or surveillance?", "Outcome: data source", "Outcome: victimization type", 
+                      "Exposure: level of analysis", "Exposure: gender inequality types",
+                      "Sample size", "Number of effects contributed", "Included in meta-regression?"))#,
+#        bootstrap_options = "condensed"
+#)
+```
+</details>
+
+## Step 3: Transform effect sizes into a uniform statistic
+
+**Restrict to only the easiest measures to manage for now:**
+
+Some questions:
+
+* DeWees & Parker use "Seemingly Unrelated Regression" - can we treat this like everything else?
+
+```{r}
+easy_set = all_data %>% 
+  filter(Include_in_regression %in% c("Yes", 
+                                      "Maybe - can we treat SUR like normal?", 
+                                      "Maybe - no variance with partial correlation")) #%>% 
+  #filter(!is.na(ES_beta) | !is.na(ES_exponentiated_beta))
+```
+
+
+**Convert between different types of Standard Errors & Betas:**
+
+To calculate a partial correlation from `escalc`, we need: **T-test statistic, sample size, the number of predictors in the regression model.**
+
+Therefore, we need to do some conversions of the information we have, when it doesn't conform completely:
+
+1. *If we're given an exponentiated Beta (ex. an Odds Ratio)*: take the natural log to get Beta.
+2. *If we're given a Standard Error*: calculate the t-test with: `t = Beta / SE`.
+3. *If we're given a 95% CI (in our case, this only happens with reported exponentiated Betas)*: calculate the SE with: `(ln(CI_upper) - Beta) / 1.96`. Then calculate the t-test using the formula from #2. 
+4. *If we're given a z-score*: I think this is actually just the same as a t-test statistic???
+5. *If we're given a p-value*: calculate the standard error using the formula: `SE = Beta / Z`, and using `z = abs(qnorm(p))`.
+  * _**QUESTION: does this still work if it wasn't linear regression? Are the defaults correct?**_
+  * https://www.statology.org/p-value-of-z-score-r/
+  * https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/Normal
+  * https://www.math.arizona.edu/~rsims/ma464/standardnormaltable.pdf
+  * https://www.socscistatistics.com/pvalues/normaldistribution.aspx
+  * https://www.bmj.com/content/343/bmj.d2090
+  * https://handbook-5-1.cochrane.org/chapter_7/7_7_7_2_obtaining_standard_errors_from_confidence_intervals_and.htm
+
+Similarly, we can calculate t-tests for correlation coefficients, and partial correlation coefficients:
+
+6. *If we're given a Pearson's correlation coefficient*: calculate the t-test with: `t = r * sqrt((n - 2) / (1 - r^2))`.
+  * _**QUESTION: does this seem to be reasonable based on [escalc](https://wviechtb.github.io/metafor/reference/escalc.html#partial-and-semi-partial-correlations)?**_
+  * *NOTE: p-values were given for each correlation coefficient, so can we double check?*
+  * https://online.stat.psu.edu/stat501/lesson/1/1.9
+  * https://en.wikipedia.org/wiki/Pearson_correlation_coefficient
+7. *If we're given a partial correlation coefficient*: calculate the t-test with: `t = r * sqrt((n - 2 - k) / (1 - r^2))`, where k is the number of other variables we're conditioning on.
+  * _**NOTE: this doesn't work, because r isn't always between 0 and 1. I don't think we actually are getting "partial correlation coefficients" from Ellis & Beatie**_
+  * _**QUESTION: does this seem to be reasonable based on [escalc](https://wviechtb.github.io/metafor/reference/escalc.html#partial-and-semi-partial-correlations)?**_
+  * https://online.stat.psu.edu/stat505/lesson/6/6.3
+
+
+Finally, for every measure, we need to capture the direction of the association, by taking into account whether a higher reported exposure was defined to indicate more or less sexism.
+
+```{r}
+easy_set = easy_set %>% 
+  mutate(
+    ES_beta = ifelse(is.na(ES_beta), log(ES_exponentiated_beta), ES_beta),
+    VAR_standard_error = case_when(
+      !is.na(VAR_standard_error) ~ VAR_standard_error,!is.na(VAR_CI_upper) ~ (log(VAR_CI_upper) - ES_beta) / 1.96,!is.na(VAR_p_value_exact) ~ ES_beta / abs(qnorm(VAR_p_value_exact)),
+      TRUE ~ 999
+    ),
+    # There are a few options for where we get the t-test values from:
+    # Just use from the study if they reported a beta & t-test:
+    VAR_t_test = case_when((!is.na(ES_beta) &
+                              !is.na(VAR_t_test)) ~ VAR_t_test,
+                           # Treat any z-scores like t-test statistics:
+                           (!is.na(ES_beta) &
+                              !is.na(VAR_z_score)) ~ VAR_z_score,
+                           # If we have a beta and a SE (reported or calculated), we can use this simple formula:
+                           (!is.na(ES_beta) &
+                              !is.na(VAR_standard_error)) ~ ES_beta / VAR_standard_error,
+                           # If we have a correlation, we can use this formula along with sample size:
+                           (!is.na(ES_correlation)) ~ ES_correlation * sqrt((Sample_size - 2) / (1 - ES_correlation ^
+                                                                                                   2)),
+                           # If we have a partial correlation coefficient, we can use this formula:
+                           (!is.na(ES_partial_correlation_coefficient)) ~ ES_partial_correlation_coefficient * sqrt((Sample_size - 2 - as.numeric(Num_predictors_total) - 1) / (1 - ES_partial_correlation_coefficient ^
+                                                                                                                                                                                  2)
+                           ),
+                           # (!is.na(ES_partial_correlation_coefficient)) ~ 5,
+                           TRUE ~ 999
+    ),
+    VAR_t_test = ifelse(
+      Higher_exposure_means == "MORE sexism",
+      VAR_t_test,
+      VAR_t_test * -1
+    )
+  )
+
+# Taking a look at these newly-calculated statistics:
+check = easy_set %>%
+  select(
+    Authors_abbr,
+    ES_beta,
+    ES_exponentiated_beta,
+    ES_partial_correlation_coefficient,
+    ES_correlation,
+    VAR_CI_upper,
+    VAR_z_score,
+    VAR_p_value_exact,
+    VAR_standard_error,
+    VAR_t_test,
+    Higher_exposure_means,
+    Sample_size,
+    Num_predictors_total
+  )
+```
+
+
+**Calculate partial correlation coefficients from EMs using SE & Beta:**
+
+Note: I had to remove the Reckdenwald study, because `escalc` gave me the error that the degrees of freedom were < 1. This measure was weird in other ways (reported z-scores rather than t-tests or SEs), so I wouldn't be surprised if there's something we don't understand.
+
+```{r}
+remove_reckdenwald = easy_set %>% filter(Study_ID != 30)
+
+paste0("Number of effects, total: ", nrow(all_data))
+paste0("Number of effects left after exclusions: ", nrow(remove_reckdenwald))
+
+for_analysis = escalc(
+  measure = "PCOR",
+  data = remove_reckdenwald,
+  ti = VAR_t_test,
+  ni = as.numeric(Sample_size),
+  mi = as.numeric(Num_predictors_total)
+)
+```
+
+*TODOs:*
+
+* DONE: Figure out what to do with correlations & partial correlations
+* DONE: Calculate t-test from CIs, z-scores, & p-values
+* Figure out what to do when only a p-value range is given
+* Add in studies where we had trouble understanding the model, and convert accordingly
+
+
+## Step 4: Build our regression model, conduct statistical tests, create plots
+
+<details>
+<summary> Click for references, instructions, some choices we're making, & set-up code. </summary>
+
+(Using the `metafor` and `clubsandwich` packages)
+
+References:
+
+1. This working paper provides a very useful explanation and guide: https://www.jepusto.com/#working-papers 
+2. This is a reference for the statistical motivation, from *Research Synthesis Methods*: https://onlinelibrary.wiley.com/doi/abs/10.1002/jrsm.5
+3. Documentation for `clubSandwich`: https://cran.r-project.org/web/packages/clubSandwich/clubSandwich.pdf
+3. Documentation for `metafor`: https://wviechtb.github.io/metafor/reference/rma.mv.html
+
+**An inventory of choices we're making to decide how to build the meta-regression model:**
+
+* What type of model?
+  * Multivariate/multi-level, becasuse some studies contributed multiple effect sizes (hence, `rma.mv`)
+  * Random effects, because our studies represent a distribution of *different* true effects
+* What is the correlation structure between estimates from the same study?
+  * We don't know! (not enough info provided per study) --> so we estimate the fixed effects component as constant, rho = ?? (some references suggest `0.6`, some `0.8`, so we'll think about it)
+  * Since we might be wrong with the assumption above, we use Robust Variance Estimation (RVE) when building our model and conducting our statistical tests
+* What is the nested/heirarchcal structure of our data?
+  * For now, it's: `studies --> effect sizes`
+  * Another option would be `"research group"/author --> studies --> effect sizes` (this is suggested when the same research group is looking at multiple different cohorts for different studies. there aren't really "research groups", although some authors frequently publish together or have contributed multiple papers to our analysis) *Note: If we want to do this, the supplementary materials here have some guidance in S3.1: https://osf.io/nyv4u/*
+
+Create stratified datasets:
+```{r}
+for_analysis = for_analysis %>% 
+  mutate(Authors_abbr = case_when(Study_ID %in% 36:38 ~ "Vieraitis et al.",
+                                  Study_ID %in% 43:44 ~ "Xie et al.",
+                                  Study_ID %in% 45:46 ~ "Yllö",
+                                  TRUE ~ Authors_abbr),
+         Nickname = ifelse(is.na(Nickname), "", paste0(": ", Nickname)))
+
+for_analysis_ALL = for_analysis
+
+for_analysis_BLACK_WHITE = for_analysis %>% 
+  filter(Race != 999)
+
+for_analysis_SURVEY = for_analysis %>% 
+  filter(Survey_surveillance == "Survey")
+
+for_analysis_SURVEILLANCE = for_analysis %>% 
+  filter(Survey_surveillance == "Surveillance")
+
+for_analysis_EXPOSURE_LEVEL_CONDENSED = for_analysis %>% 
+  filter(Exposure_level_condensed != 999)
+```
+
+Create a covariance matrix. Notes: I'm not sure if this rho is correct, and I'm not sure whether I need to impute a separate covariance matrix for each subsetted dataset, but I'm doing it just in case for now.
+
+```{r}
+# constant sampling correlation assumption
+rho <- 0.6 #is this a good assumption for us? In other places it's 0.8....
+
+# create a covariance matrix assuming constant sampling correlation (working model)
+cov_matrix_ALL <- impute_covariance_matrix(
+  vi = for_analysis_ALL$vi, #vector of variances
+  cluster = for_analysis_ALL$Study_ID,
+  r = rho, #assuming constant. make sure we pick the right value.
+  smooth_vi = FALSE #this is the default. how would we know if we want to smooth?
+  #subgroup = for_analysis$authors, #i *think* this is where we'd do heirarchical clustering. but not sure, so leaving it out for now
+)
+
+cov_matrix_BLACK_WHITE <- impute_covariance_matrix(
+  vi = for_analysis_BLACK_WHITE$vi, cluster = for_analysis_BLACK_WHITE$Study_ID, r = rho, smooth_vi = FALSE
+)
+
+cov_matrix_SURVEY <- impute_covariance_matrix(
+  vi = for_analysis_SURVEY$vi, cluster = for_analysis_SURVEY$Study_ID, r = rho, smooth_vi = FALSE
+)
+
+cov_matrix_SURVEILLANCE <- impute_covariance_matrix(
+  vi = for_analysis_SURVEILLANCE$vi, cluster = for_analysis_SURVEILLANCE$Study_ID, r = rho, smooth_vi = FALSE
+)
+
+cov_matrix_EXPOSURE_LEVEL_CONDENSED <- impute_covariance_matrix(
+  vi = for_analysis_EXPOSURE_LEVEL_CONDENSED$vi, cluster = for_analysis_EXPOSURE_LEVEL_CONDENSED$Study_ID, r = rho, smooth_vi = FALSE
+)
+```
+
+```{r, echo=FALSE, include=FALSE}
+# # fit random effects working model in metafor - using ALL predictors
+# multilevel_model <- rma.mv(
+#   # here I'm specificying a formula, rather than an argument for the Y, and for the moderators
+#   yi ~ 0 + Survey_surveillance + Study_design + Ecological_cross_level + 
+#     Outcome_data_source_condensed + Decade + Exposure_level + Outcome_type_factor +
+#     Exposure_category_economic + Exposure_category_education + Exposure_category_political,
+#     #"use a no-intercept specificaiton so that coefficients represent avg effect sizes for the corresponding category" (pre-print p.23)
+#   V = cov_matrix,
+#   random = ~ 1 | Study_ID / Effect_ID, #this designates the nested structure of the random effects. QUESTION: if we do heirarchical + clustered, how do we designate that?
+#   #sparse = TRUE, #this is about speeding up the process, so not sure if it's necessary. I left it out.
+#   #test= "t", #use t-tests instead of the default z. why would we want this? (I left it out.)
+#   data = for_analysis
+# )
+
+# # For the funnel and forest plots, it makes more sense (to me) to plot from a regression model that doesn't include moderators.
+# no_moderators <- rma.mv(
+#   yi ~ 1,
+#   V = cov_matrix,
+#   random = ~ 1 | Study_ID / Effect_ID, #this designates the nested structure of the random effects.
+#   data = for_analysis
+# )
+```
+
+Fit models with no moderators, to estimate the summary statistic and for use in funnel and forest plots:
+
+```{r}
+no_moderators_ALL <- rma.mv(yi ~ 1,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+no_moderators_SURVEY <- rma.mv(yi ~ 1,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+no_moderators_SURVEILLANCE <- rma.mv(yi ~ 1,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+```
+
+Fit models to test each variable of interest, together and separately:
+
+```{r}
+########################### Every variable of interest in the model #####################
+full_model_ALL <- rma.mv(yi ~ 1 + Decade + Survey_surveillance + Exposure_level_condensed +
+                           Outcome_data_source_condensed + Victimization_type + Perpetrator_relationship + 
+                           Unadjusted,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+full_model_SURVEY <- rma.mv(yi ~ 1 + Decade + Survey_surveillance + Exposure_level_condensed +
+                           Outcome_data_source_condensed + Victimization_type + Perpetrator_relationship + 
+                           Unadjusted,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+full_model_SURVEILLANCE <- rma.mv(yi ~ 1 + Decade + Survey_surveillance + Exposure_level_condensed +
+                           Outcome_data_source_condensed + Victimization_type + Perpetrator_relationship + 
+                           Unadjusted,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Decade #####################
+decade_model_ALL <- rma.mv(yi ~ 0 + Decade,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+decade_model_SURVEY <- rma.mv(yi ~ 0 + Decade,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+decade_model_SURVEILLANCE <- rma.mv(yi ~ 0 + Decade,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Exposure level #####################
+level_ALL <- rma.mv(yi ~ 0 + Exposure_level_condensed,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+level_SURVEY <- rma.mv(yi ~ 0 + Exposure_level_condensed,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+level_SURVEILLANCE <- rma.mv(yi ~ 0 + Exposure_level_condensed,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Outcome_data_source #####################
+data_ALL <- rma.mv(yi ~ 0 + Outcome_data_source_condensed,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+data_SURVEILLANCE <- rma.mv(yi ~ 0 + Outcome_data_source_condensed,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Victimization type #####################
+vic_ALL <- rma.mv(yi ~ 0 + Victimization_type,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+vic_SURVEY <- rma.mv(yi ~ 0 + Victimization_type,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+vic_SURVEILLANCE <- rma.mv(yi ~ 0 + Victimization_type,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Perpetrator relationship #####################
+perp_ALL <- rma.mv(yi ~ 0 + Perpetrator_relationship,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+perp_SURVEY <- rma.mv(yi ~ 1 + 0 + Perpetrator_relationship,
+  V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEY
+)
+
+perp_SURVEILLANCE <- rma.mv(yi ~ 0 + Perpetrator_relationship,
+  V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_SURVEILLANCE
+)
+
+########################### Exposure_level_condensed #####################
+exp_EXPOSURE_LEVEL_CONDENSED <- rma.mv(yi ~ 0 + Exposure_level_condensed,
+  V = cov_matrix_EXPOSURE_LEVEL_CONDENSED, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_EXPOSURE_LEVEL_CONDENSED
+)
+
+########################### Survey / surveillance #####################
+survey_surveillance_ALL <- rma.mv(yi ~ 0 + Survey_surveillance,
+  V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL
+)
+
+########################### Race #####################
+race_BLACK_WHITE <- rma.mv(yi ~ 0 + Race,
+  V = cov_matrix_BLACK_WHITE, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_BLACK_WHITE
+)
+```
+</details>
+
+
+### Meta-regression output:
+```{r, include=FALSE, echo=FALSE}
+# Note that this reports model-based (not robust) standard errors
+#full_model_ALL
+```
+
+```{r}
+### T-tests for each variable:
+
+# #these tests are RVE based and are robust to mispecification of the variances and covariances
+# coef_test(
+#   obj = multilevel_model, #estimation model above
+#   #cluster = for_analysis$study_id, #define cluster IDs (not needed, already specified in model)
+#   vcov = "CR2" #estimation method (CR2 is best)
+# )
+
+# coef_test(full_model_ALL, vcov = "CR2")
+# coef_test(full_model_SURVEY, vcov = "CR2")
+# coef_test(full_model_SURVEILLANCE, vcov = "CR2")
+
+
+########################## No moderators #############################
+#coef_test(no_moderators_ALL, vcov = "CR2")
+conf_int(no_moderators_ALL, vcov = "CR2")
+#coef_test(no_moderators_SURVEY, vcov = "CR2")
+conf_int(no_moderators_SURVEY, vcov = "CR2")
+#coef_test(no_moderators_SURVEILLANCE, vcov = "CR2")
+conf_int(no_moderators_SURVEILLANCE, vcov = "CR2")
+
+########################### Survey / surveillance #####################
+coef_test(survey_surveillance_ALL, vcov = "CR2")
+#conf_int(survey_surveillance_ALL, vcov = "CR2")
+
+########################### Exposure_level_condensed #####################
+coef_test(exp_EXPOSURE_LEVEL_CONDENSED, vcov = "CR2")
+
+########################### Race #####################
+coef_test(race_BLACK_WHITE, vcov = "CR2")
+
+########################### Decade #####################
+coef_test(decade_model_ALL, vcov = "CR2")
+#conf_int(decade_model_ALL, vcov = "CR2")
+#decade_model_ALL
+
+#coef_test(decade_model_SURVEY, vcov = "CR2")
+#coef_test(decade_model_SURVEILLANCE, vcov = "CR2")
+
+########################### Exposure level #####################
+# coef_test(level_ALL, vcov = "CR2")
+# coef_test(level_SURVEY, vcov = "CR2")
+# coef_test(level_SURVEILLANCE, vcov = "CR2")
+
+########################### Outcome_data_source #####################
+#coef_test(data_ALL, vcov = "CR2")
+coef_test(data_SURVEILLANCE, vcov = "CR2")
+
+########################### Victimization type #####################
+coef_test(vic_ALL, vcov = "CR2")
+#coef_test(vic_SURVEY, vcov = "CR2")
+#coef_test(vic_SURVEILLANCE, vcov = "CR2")
+
+########################### Perpetrator relationship #####################
+coef_test(perp_ALL, vcov = "CR2")
+#coef_test(perp_SURVEY, vcov = "CR2")
+#coef_test(perp_SURVEILLANCE, vcov = "CR2")
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+### Confidence intervals for those tests:
+# conf_int(
+#   obj = model_6,
+#   vcov = "CR2"
+# )
+```
+
+```{r, echo=FALSE}
+#Not sure when we would do a wald test, or what the constraints would be....
+# Wald_test(
+#   obj = multilevel_model,
+#   constraints = ??
+#   vcov = "CR2"
+# )
+```
+
+### Funnel plot: publication bias
+```{r funnel_plot}
+pdf(file = 'PlotsTables/funnel_plot.pdf') 
+funnel(no_moderators_ALL)
+dev.off()
+
+ranktest(no_moderators_ALL)
+# QUESTION: is this still appropriately down-weighting estimates within the same study? I don't think so, because each dot just shows up... but maybe it doesn't matter?
+```
+
+### Forest plots
+
+(saved as PDFs)
+
+```{r forest_plot, echo=FALSE, warning = FALSE, message = FALSE}
+# pdf(file = 'PlotsTables/forestplot_all.pdf') 
+# forest(
+#   x = rma.mv(yi ~ 1, V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, data = for_analysis_ALL,
+#              slab=paste0(Authors_abbr, " (", PubYear, ")", Nickname)),
+#   annotate = TRUE, #does this add numbers on to the plot?
+#   addfit = TRUE, #TRUE would add in one summary measure for the whole thing
+#   addpred = FALSE, #the bounds of the prediction interval (might not be meaningful)
+#   showweights = FALSE, #TRUE would be interesting to see, but the documentation warns the weights shown don't reflect the complexity from the model with rma.mv
+#   #level=x$level, #this is about the CI level, which I don't think is included anywhere in our model? even though that's where the default is taken from
+#   refline = 0, #I put this at 1 to show the relation to the null. change if not using ORs
+#   #digits=2L, #rounding for annotations
+#   #xlab, #label for the x-axis
+#   #slab = for_analysis$study_id, #study labels. supress with NA, or add column
+#   #ilab, #optional extra label for studies
+#   #ilab.xpos, ilab.pos,
+#   #order = c(1:3, 8, 4:7), #specify how the studies should be ordered, including obs (effect sizes), prec (variances), or a vector with the order
+#   header = TRUE #c("Study (& specific effect)", "Estimate [95% CI]") #can pass in a character vector for left & right headings, or TRUE
+# )
+# dev.off()
+
+for_analysis_ALL = for_analysis_ALL %>% 
+  group_by(Study_ID) %>% 
+  mutate(First_ES = max(Effect_ID)) %>% 
+  ungroup() %>% 
+  mutate(Nickname_small = ifelse(Effect_ID == First_ES,
+                                 paste0(Authors_abbr, " (", PubYear, ")"),
+                                 strrep(" ", First_ES - Effect_ID)))
+
+########## ALL ############
+pdf(file = 'PlotsTables/forestplot_all.pdf') 
+x = rma.mv(yi ~ 1, V = cov_matrix_ALL, random = ~ 1 | Study_ID / Effect_ID, 
+           data = for_analysis_ALL,
+           slab = paste0(Authors_abbr, " (", PubYear, ")")
+           )
+
+dd <- c(0,diff(for_analysis_ALL$Study_ID))
+dd[dd > 0] <- 1
+rows <- (1:x$k) + cumsum(dd)
+par(tck=-.01, mgp = c(1.6,.2,0))
+
+forest(
+  x = x,
+  annotate = FALSE,
+  addfit = TRUE,
+  #slab = FALSE, #for_analysis_ALL$Nickname_small,
+  showweights = FALSE,
+  refline = 0,
+  header = FALSE,
+  cex=0.3,
+  cex.lab=0.6,
+  cex.axis=0.6
+ # rows=rows, 
+ # ylim=c(0.5,max(rows)+3)
+)
+#abline(h = rows[c(1,diff(rows)) == 2] - 1, lty="dotted")
+dev.off()
+
+########## SURVEILLANCE ############
+pdf(file = 'PlotsTables/forestplot_surveillance_no_lines.pdf') 
+x = rma.mv(yi ~ 1, V = cov_matrix_SURVEILLANCE, random = ~ 1 | Study_ID / Effect_ID, 
+           data = for_analysis_SURVEILLANCE,
+           slab = paste0(Authors_abbr, " (", PubYear, ")", Nickname))
+
+dd <- c(0,diff(for_analysis_SURVEILLANCE$Study_ID))
+dd[dd > 0] <- 1
+rows <- (1:x$k) + cumsum(dd)
+par(tck=-.01, mgp = c(1.6,.2,0))
+
+forest(
+  x = x,
+  annotate = TRUE,
+  addfit = TRUE,
+  showweights = FALSE,
+  refline = 0,
+  header = TRUE,
+  cex=0.35, 
+  cex.lab=0.6,
+  cex.axis=0.6
+  # rows=rows, 
+  # ylim=c(0.5,max(rows)+3)
+)
+#abline(h = rows[c(1,diff(rows)) == 2] - 1, lty="dotted")
+
+dev.off()
+
+########## SURVEY ############
+pdf(file = 'PlotsTables/forestplot_survey.pdf') 
+x = rma.mv(yi ~ 1, V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, 
+           data = for_analysis_SURVEY,
+           slab = paste0(Authors_abbr, " (", PubYear, ")", Nickname))
+
+dd <- c(0,diff(for_analysis_SURVEY$Study_ID))
+dd[dd > 0] <- 1
+rows <- (1:x$k) + cumsum(dd)
+par(tck=-.01, mgp = c(1.6,.2,0))
+
+forest(
+  x = x,
+  annotate = TRUE,
+  addfit = TRUE,
+  showweights = FALSE,
+  refline = 0,
+  header = TRUE,
+  cex=0.5, 
+  cex.lab=0.6,
+  cex.axis=0.6,
+  rows=rows,
+  ylim=c(0.5,max(rows)+3)
+)
+abline(h = rows[c(1,diff(rows)) == 2] - 1, lty="dotted")
+dev.off()
+
+########## SURVEY NO LINES ############
+pdf(file = 'PlotsTables/forestplot_survey_no_lines.pdf') 
+x = rma.mv(yi ~ 1, V = cov_matrix_SURVEY, random = ~ 1 | Study_ID / Effect_ID, 
+           data = for_analysis_SURVEY,
+           slab = Effect_ID)
+
+dd <- c(0,diff(for_analysis_SURVEY$Study_ID))
+dd[dd > 0] <- 1
+rows <- (1:x$k) + cumsum(dd)
+par(tck=-.01, mgp = c(1.6,.2,0))
+
+forest(
+  x = x,
+  annotate = TRUE,
+  addfit = TRUE,
+  showweights = FALSE,
+  refline = 0,
+  header = TRUE,
+  cex=0.5, 
+  cex.lab=0.6,
+  cex.axis=0.6
+  # rows=rows, 
+  # ylim=c(0.5,max(rows)+3)
+)
+#abline(h = rows[c(1,diff(rows)) == 2] - 1, lty="dotted")
+dev.off()
+```
