@@ -67,8 +67,8 @@ Expected total number of studies: 136
 ``` r
 agreement2 = tibble(
   my_rownames = c("A_yes", "A_no"),
-  B_yes = c(49, 6),
-  B_no = c(2, 79)
+  B_yes = c(42, 6),
+  B_no = c(2, 86)
 ) %>% column_to_rownames(., var = "my_rownames")
 
 knitr::kable(agreement2)
@@ -76,8 +76,8 @@ knitr::kable(agreement2)
 
 |        | B\_yes | B\_no |
 | :----- | -----: | ----: |
-| A\_yes |     49 |     2 |
-| A\_no  |      6 |    79 |
+| A\_yes |     42 |     2 |
+| A\_no  |      6 |    86 |
 
 ``` r
 frequency_list_for_repeating2 = c(agreement2["A_yes", "B_yes"],
@@ -95,7 +95,7 @@ cohen.kappa(x = cbind(raterA2, raterB2))
     ## 
     ## Cohen Kappa and Weighted Kappa correlation coefficients and confidence boundaries 
     ##                  lower estimate upper
-    ## unweighted kappa  0.79     0.88  0.96
-    ## weighted kappa    0.79     0.88  0.96
+    ## unweighted kappa  0.78     0.87  0.96
+    ## weighted kappa    0.78     0.87  0.96
     ## 
     ##  Number of subjects = 136
